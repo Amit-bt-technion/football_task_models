@@ -23,6 +23,7 @@ class EventSequenceDataset(Dataset):
     def __init__(
         self, 
         events_df: pd.DataFrame,
+        precomputed_embeddings: Dict[str, np.ndarray],
         sequence_length: int = 10,
         min_gap: int = 1,
         max_gap: Optional[int] = None,
@@ -30,7 +31,6 @@ class EventSequenceDataset(Dataset):
         shuffle: bool = True,
         max_samples_per_match: Optional[int] = None,
         max_total_samples: Optional[int] = None,
-        precomputed_embeddings: Optional[Dict[str, np.ndarray]] = None,
         verbose: bool = True
     ):
         """
@@ -38,6 +38,7 @@ class EventSequenceDataset(Dataset):
         
         Args:
             events_df: DataFrame containing event embeddings with match_id column
+            precomputed_embeddings: dictionary of precomputed embeddings keyed by match_id
             sequence_length: Number of events in each sequence
             min_gap: Minimum number of events between sequences
             max_gap: Maximum number of events between sequences (if None, no limit)
@@ -45,7 +46,6 @@ class EventSequenceDataset(Dataset):
             shuffle: Whether to shuffle the samples
             max_samples_per_match: Maximum number of samples to generate per match
             max_total_samples: Maximum total samples across all matches
-            precomputed_embeddings: Optional dictionary of precomputed embeddings keyed by match_id
             verbose: Whether to show progress bars
         """
         self.logger = logging.getLogger(__name__)
@@ -70,14 +70,12 @@ class EventSequenceDataset(Dataset):
         for match_id in tqdm(self.match_ids, desc="Organizing match data", disable=not verbose):
             match_df = events_df[events_df['match_id'] == match_id]
             
-            # If precomputed embeddings are provided, use them
-            if precomputed_embeddings is not None and match_id in precomputed_embeddings:
-                self.embeddings[match_id] = precomputed_embeddings[match_id]
-            else:
-                # Otherwise, convert DataFrame to numpy array (excluding match_id column)
-                match_df_no_id = match_df.drop(columns=['match_id'])
-                self.embeddings[match_id] = match_df_no_id.values
-                
+            # If no precomputed embeddings are provided, raise ValueError
+            if match_id not in precomputed_embeddings:
+                raise ValueError(f"No embeddings for match {match_id}.")
+
+            # Set events and embeddings properties
+            self.embeddings[match_id] = precomputed_embeddings[match_id]
             self.match_events[match_id] = len(self.embeddings[match_id])
         
         # Generate sequence pairs
@@ -246,7 +244,7 @@ def create_data_loaders(
     
     logger.info(f"Split {num_matches} matches into {len(train_match_ids)} train, "
                 f"{len(val_match_ids)} validation, and {len(test_match_ids)} test")
-    
+
     # Create datasets
     train_dataset = EventSequenceDataset(
         events_df=events_df,
