@@ -55,7 +55,6 @@ def main(args):
     os.makedirs(args.artifacts_dir, exist_ok=True)
     
     # Set device
-    logger.debug(f"Cuda available: {torch.cuda.is_available()}")
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     logger.info(f"Using device: {device}")
     
@@ -75,6 +74,7 @@ def main(args):
     logger.info("Creating data loaders...")
     train_loader, val_loader, test_loader = create_data_loaders(
         events_df=events_df,
+        precomputed_embeddings=embeddings,
         sequence_length=args.sequence_length,
         min_gap=args.min_gap,
         max_gap=args.max_gap,
@@ -82,7 +82,6 @@ def main(args):
         val_ratio=args.val_ratio,
         test_ratio=1.0 - args.train_ratio - args.val_ratio,
         batch_size=args.batch_size,
-        precomputed_embeddings=embeddings,
         max_samples_per_match=args.max_samples_per_match,
         max_samples_total=args.max_samples_total,
         num_workers=args.num_workers,
