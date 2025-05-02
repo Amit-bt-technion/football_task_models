@@ -14,7 +14,7 @@ from tqdm import tqdm
 from typing import Dict, Tuple, Optional, Union
 
 from utils.data_loading import load_match_events
-from utils.model import EventAutoencoder
+from utils.event_autoencoder import EventAutoencoder
 
 
 def load_and_embed_matches(

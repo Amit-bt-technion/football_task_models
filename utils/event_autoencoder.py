@@ -1,5 +1,5 @@
 """
-model.py
+event_autoencoder.py
 --------
 Contains the EventAutoencoder model class definition.
 """
