@@ -19,13 +19,17 @@ class PositionalEncoding(nn.Module):
         # Create positional encodings
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+
+        # Frequency variation - higher dimensions get faster-changing signals
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
-        
+
+        # Even dimensions use sine function and odd dimensions use cosine function
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
         
-        # Register buffer (persistent state)
+        # Register buffer (persistent state) -  ensures the positional encoding is saved with the model,
+        # Moved to the correct device with the model and isn't treated as a trainable parameter
         self.register_buffer('pe', pe)
         
     def forward(self, x):
@@ -61,6 +65,9 @@ class EventSequenceTransformer(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_encoder_layers)
         
         # [CLS] token embedding - will be prepended to each sequence
+        # Borrows from BERT's approach of using a special classification token
+        # This token accumulates information from the entire sequence through self-attention
+        # By the final layer, the representation of this token serves as a summary of the entire input
         self.cls_token = nn.Parameter(torch.randn(1, 1, embedding_dim))
         
         # Final classifier for the [CLS] token representation
@@ -87,13 +94,14 @@ class EventSequenceTransformer(nn.Module):
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)
         x = torch.cat([cls_tokens, x], dim=1)
 
-        # Add positional encoding
-        x = self.pos_encoder(x)
+        # Adds position information to each event embedding
+        x = self.pos_encoder.forward(x)
 
-        # Apply transformer encoder
+        # Apply transformer encoder - self-attention mechanism processes the entire sequence, allowing events to contextualize each other
         x = self.transformer_encoder(x, src_mask)
 
         # Use the [CLS] token representation for classification
+        # Only the first position (CLS token) representation is used for classification as it serves as a summary of the entire input by the final layer
         cls_representation = x[:, 0]
 
         # Classify

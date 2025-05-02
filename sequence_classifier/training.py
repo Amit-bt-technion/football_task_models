@@ -14,9 +14,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple, Optional, Union, Any
-
-from sequence_classifier.sequence_transformer import EventSequenceTransformer
+from typing import Dict, List, Tuple, Optional
 
 
 def train_epoch(
