@@ -20,7 +20,7 @@ from utils.model import EventAutoencoder
 def load_and_embed_matches(
     csv_root_dir: str,
     encoder_model_path: str,
-    cache_dir: Optional[str] = "embedded_cache",
+    cache_dir: Optional[str] = "cache",
     device: Optional[torch.device] = None,
     batch_size: int = 128,
     force_recompute: bool = False,
@@ -50,11 +50,20 @@ def load_and_embed_matches(
     # Create cache directory if it doesn't exist
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)
-        
+
+    # Path to cached events_df pickle file
+    events_cache_path = Path(cache_dir) / "events_df.pkl"
+
     # Load all match events
-    logger.info(f"Loading match events from {csv_root_dir}")
-    events_df = load_match_events(csv_root_dir=csv_root_dir)
-    events_df = events_df.drop(columns=["Unnamed: 0"])
+    if events_cache_path and events_cache_path.exists() and not force_recompute:
+        logger.info(f"Loading cached match events from {events_cache_path}")
+        events_df = pd.read_pickle(events_cache_path)
+    else:
+        logger.info(f"Loading match events from {csv_root_dir}")
+        events_df = load_match_events(csv_root_dir=csv_root_dir)
+        events_df = events_df.drop(columns=["Unnamed: 0"])
+        logger.info(f"Caching events_df to: {events_cache_path}")
+        events_df.to_pickle(events_cache_path)
 
     # Get unique match IDs
     match_ids = events_df["match_id"].unique()
@@ -64,7 +73,7 @@ def load_and_embed_matches(
     embeddings = {}
     
     # Load the encoder model
-    input_dim = events_df.shape[1] - 1 # removing match_id column
+    input_dim = events_df.shape[1] - 1 # removing match_id column later
     model = EventAutoencoder(input_dim=input_dim, latent_dim=32)
     model.load_state_dict(torch.load(encoder_model_path, map_location=device, weights_only=False))
     model = model.to(device)
