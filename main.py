@@ -7,7 +7,7 @@ if __name__ == "__main__":
     # Data and model paths
     parser.add_argument("--data-dir", type=str, default="../match_csv", help="Directory containing match CSV files")
     parser.add_argument("--encoder-path", type=str, required=True, help="Path to pretrained encoder model")
-    parser.add_argument("--cache-dir", type=str, default="embedded_cache", help="Directory to cache embeddings")
+    parser.add_argument("--cache-dir", type=str, default="cache", help="Directory to cache embeddings")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Directory to save model checkpoints")
     parser.add_argument("--artifacts-dir", type=str, default="artifacts", help="Directory to save output artifacts")
 
@@ -17,8 +17,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-gap", type=int, default=None, help="Maximum number of events between sequences")
     parser.add_argument("--train-ratio", type=float, default=0.8, help="Proportion of matches for training")
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Proportion of matches for validation")
-    parser.add_argument("--max-samples-per-match", type=int, default=1000, help="Maximum samples per match")
-    parser.add_argument("--max-samples-total", type=int, default=100000, help="Maximum total samples")
+    parser.add_argument("--max-samples-per-match", type=int, default=10000, help="Maximum samples per match")
+    parser.add_argument("--max-samples-total", type=int, default=10000000, help="Maximum total samples")
 
     # Transformer model parameters
     parser.add_argument("--transformer-heads", type=int, default=8, help="Number of attention heads")
