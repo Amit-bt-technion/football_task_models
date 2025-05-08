@@ -73,6 +73,7 @@ def main(args):
     # Step 2: Create data loaders
     logger.info("Creating data loaders...")
     train_loader, val_loader, test_loader = create_data_loaders(
+        task=args.task,
         events_df=events_df,
         precomputed_embeddings=embeddings,
         sequence_length=args.sequence_length,
@@ -80,7 +81,6 @@ def main(args):
         max_gap=args.max_gap,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
-        test_ratio=1.0 - args.train_ratio - args.val_ratio,
         batch_size=args.batch_size,
         max_samples_per_match=args.max_samples_per_match,
         max_samples_total=args.max_samples_total,

@@ -1,8 +1,12 @@
 import argparse
 from sequence_classifier.main_transformer import main
+from sequence_classifier.dataset import TASK_REGISTRY
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a sequence transformer for football event classification")
+
+    # Task parameters
+    parser.add_argument("--task", type=str, required=True, choices=TASK_REGISTRY.keys(), help="Task to train the model for")
 
     # Data and model paths
     parser.add_argument("--data-dir", type=str, default="../match_csv", help="Directory containing match CSV files")
