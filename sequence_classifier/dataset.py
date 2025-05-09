@@ -17,10 +17,18 @@ from tqdm import tqdm
 TASK_REGISTRY = {}
 
 
-def register_task(task_name):
+def register_task_logic(task_name):
     """Decorator to register task functions in the global registry."""
     def decorator(func):
-        TASK_REGISTRY[task_name] = func
+        TASK_REGISTRY[task_name] = {}
+        TASK_REGISTRY[task_name]["logic"] = func
+        return func
+    return decorator
+
+def register_task_item_getter(task_name):
+    """Decorator to register task getitem dunder in the global registry."""
+    def decorator(func):
+        TASK_REGISTRY[task_name]["getitem"] = func
         return func
     return decorator
 
@@ -32,7 +40,8 @@ class EventSequenceDataset(Dataset):
     """
     
     def __init__(
-        self, 
+        self,
+        task: str,
         events_df: pd.DataFrame,
         precomputed_embeddings: Dict[str, np.ndarray],
         sequence_length: int = 10,
@@ -42,7 +51,6 @@ class EventSequenceDataset(Dataset):
         shuffle: bool = True,
         max_samples_per_match: Optional[int] = None,
         max_total_samples: Optional[int] = None,
-        task: str = "chronological_order",  # Default task
         task_params: Optional[Dict] = None,
         verbose: bool = True
     ):
@@ -50,6 +58,7 @@ class EventSequenceDataset(Dataset):
         Initialize the EventSequenceDataset.
         
         Args:
+            task: Name of the task to determine sampling strategy
             events_df: DataFrame containing event embeddings with match_id column
             precomputed_embeddings: dictionary of precomputed embeddings keyed by match_id
             sequence_length: Number of events in each sequence
@@ -59,7 +68,6 @@ class EventSequenceDataset(Dataset):
             shuffle: Whether to shuffle the samples
             max_samples_per_match: Maximum number of samples to generate per match
             max_total_samples: Maximum total samples across all matches
-            task: Name of the task to determine sampling strategy
             task_params: Additional parameters specific to the task
             verbose: Whether to show progress bars
         """
@@ -71,8 +79,7 @@ class EventSequenceDataset(Dataset):
         self.task_params = task_params or {}
 
         # Check if task exists in registry
-        if task not in TASK_REGISTRY:
-            raise ValueError(f"Task '{task}' not found in registry. Available tasks: {list(TASK_REGISTRY.keys())}")
+        assert task in TASK_REGISTRY, f"Task '{task}' not found in registry. Available tasks: {list(TASK_REGISTRY.keys())}"
 
         # Filter by match_ids if provided
         if match_ids is not None:
@@ -83,13 +90,12 @@ class EventSequenceDataset(Dataset):
         self.logger.info(f"Processing {len(self.match_ids)} unique matches for task '{task}'")
         
         # Group events by match_id
-        self.match_events = {}
+        self.num_match_events = {}
         self.embeddings = {}
         self.num_columns = events_df.shape[1] - 1  # Subtract match_id column
         
         # Organize data by match
         for match_id in tqdm(self.match_ids, desc="Organizing match data", disable=not verbose):
-            match_df = events_df[events_df['match_id'] == match_id]
             
             # If no precomputed embeddings are provided, raise ValueError
             if match_id not in precomputed_embeddings:
@@ -97,7 +103,7 @@ class EventSequenceDataset(Dataset):
 
             # Set events and embeddings properties
             self.embeddings[match_id] = precomputed_embeddings[match_id]
-            self.match_events[match_id] = len(self.embeddings[match_id])
+            self.num_match_events[match_id] = len(self.embeddings[match_id])
         
         # Generate samples using the task-specific function
         self.samples = self._generate_samples(
@@ -124,13 +130,13 @@ class EventSequenceDataset(Dataset):
             List of samples as defined by the task-specific function
         """
         # Get the task-specific sampling function
-        sampling_func = TASK_REGISTRY[self.task]
+        sampling_func = TASK_REGISTRY[self.task]["logic"]
 
         samples = []
         total_samples = 0
         
         for match_id in tqdm(self.match_ids, desc=f"Generating samples for {self.task}", disable=not verbose):
-            num_events = self.match_events[match_id]
+            num_events = self.num_match_events[match_id]
             
             # Skip matches that don't have enough events for the minimum sequence length
             if num_events < self.sequence_length:
@@ -145,6 +151,7 @@ class EventSequenceDataset(Dataset):
                 min_gap=self.min_gap,
                 max_gap=self.max_gap,
                 max_samples=max_samples_per_match,
+                events_df=events_df,
                 **self.task_params
             )
 
@@ -172,88 +179,13 @@ class EventSequenceDataset(Dataset):
             A tuple containing input tensor(s) and target tensor(s) as defined by the task
         """
         sample = self.samples[idx]
-
-        # Unpack sample information (format depends on task)
         match_id = sample[0]  # First element is always match_id
-
-        # For chronological_order task (maintain backward compatibility)
-        if self.task == "chronological_order":
-            seq1_start, seq2_start, label = sample[1:]
-
-            # Get embeddings for both sequences
-            seq1 = self.embeddings[match_id][seq1_start:seq1_start + self.sequence_length]
-            seq2 = self.embeddings[match_id][seq2_start:seq2_start + self.sequence_length]
-
-            # Concatenate the sequences
-            concatenated = np.concatenate([seq1, seq2], axis=0)
-
-            # Convert to tensors
-            X = torch.tensor(concatenated, dtype=torch.float32)
-            y = torch.tensor(label, dtype=torch.long)
-
-            return X, y
-
-        # For next_event_prediction task
-        elif self.task == "next_event_prediction":
-            seq_start, next_event_idx = sample[1:]
-
-            # Get embeddings for sequence and next event
-            seq = self.embeddings[match_id][seq_start:seq_start + self.sequence_length]
-            next_event = self.embeddings[match_id][next_event_idx]
-
-            # Convert to tensors
-            X = torch.tensor(seq, dtype=torch.float32)
-            y = torch.tensor(next_event, dtype=torch.float32)
-
-            return X, y
-
-        # For event_type_classification task
-        elif self.task == "event_type_classification":
-            seq_start, event_types = sample[1], sample[2]
-
-            # Get embeddings for sequence
-            seq = self.embeddings[match_id][seq_start:seq_start + self.sequence_length]
-
-            # Convert to tensors
-            X = torch.tensor(seq, dtype=torch.float32)
-            y = torch.tensor(event_types, dtype=torch.long)
-
-            return X, y
-
-        # For custom tasks, parse the sample structure as needed
-        else:
-            # The specific implementation depends on how the task's sampling function formats its output
-            # This is a flexible extension point for adding more tasks
-            # Process remaining elements based on task-specific format
-            task_data = sample[1:]
-
-            # Use task-specific processing logic
-            X_data, y_data = self._process_task_sample(match_id, task_data)
-
-            # Convert to tensors
-            X = torch.tensor(X_data, dtype=torch.float32)
-            y = torch.tensor(y_data, dtype=torch.float32 if isinstance(y_data[0], float) else torch.long)
-
-            return X, y
-
-    def _process_task_sample(self, match_id, task_data):
-        """
-        Process task-specific sample data.
-        This method can be overridden by subclasses for custom tasks.
-
-        Args:
-            match_id: Match ID
-            task_data: Task-specific data from the sample
-
-        Returns:
-            Tuple of (X_data, y_data) for the model
-        """
-        raise NotImplementedError(f"Processing for task '{self.task}' not implemented")
+        return TASK_REGISTRY[self.task]["getitem"](sample, match_id, self.embeddings, self.sequence_length)
 
 
 # Register task functions
 
-@register_task("chronological_order")
+@register_task_logic("chronological_order")
 def sample_chronological_order(
     match_id: str,
     num_events: int,
@@ -321,29 +253,61 @@ def sample_chronological_order(
 
     return samples
 
+@register_task_item_getter("chronological_order")
+def get_item_for_chronological_order(
+    sample: Tuple,
+    match_id: int,
+    embeddings: np.ndarray,
+    sequence_length: int,
+) -> Tuple:
+    """
+    Getitem logic for chronological order classification.
 
-@register_task("next_event_prediction")
-def sample_next_event_prediction(
+    Args:
+        sample: The sample matching the requested idx
+        match_id: Match ID
+        embeddings: Match events embeddings
+        sequence_length: Number of events in each sequence
+
+    Returns:
+        Tuple: (sample, label)
+    """
+    seq1_start, seq2_start, label = sample[1:]
+
+    # Get embeddings for both sequences
+    seq1 = embeddings[match_id][seq1_start:seq1_start + sequence_length]
+    seq2 = embeddings[match_id][seq2_start:seq2_start + sequence_length]
+
+    # Concatenate the sequences
+    concatenated = np.concatenate([seq1, seq2], axis=0)
+
+    # Convert to tensors
+    X = torch.tensor(concatenated, dtype=torch.float32)
+    y = torch.tensor(label, dtype=torch.long)
+
+    return X, y
+
+def get_dominating_team_label(events_df: np.ndarray, sequence_start: int, sequence_length:int) -> int:
+    # TODO: @zendellll implements
+    pass
+
+
+@register_task_logic("dominating_team_classification")
+def sample_next_dominating_team(
     match_id: str,
     num_events: int,
     sequence_length: int,
-    min_gap: int = 1,
-    max_gap: Optional[int] = None,
     max_samples: Optional[int] = None,
-    prediction_distance: int = 1,
     **kwargs
 ) -> List[Tuple]:
     """
-    Generate samples for next event prediction.
+    Generate samples for dominating team prediction.
 
     Args:
         match_id: Match ID
         num_events: Number of events in the match
         sequence_length: Number of events in each sequence
-        min_gap: Not used in this task but kept for API consistency
-        max_gap: Not used in this task but kept for API consistency
         max_samples: Maximum number of samples to generate
-        prediction_distance: How many events ahead to predict
 
     Returns:
         List of tuples: (match_id, seq_start, next_event_idx)
@@ -351,67 +315,10 @@ def sample_next_event_prediction(
     samples = []
 
     # Skip matches that don't have enough events
-    if num_events < sequence_length + prediction_distance:
-        return samples
-
-    # Maximum starting position to ensure we have enough events for the sequence and the target
-    max_start = num_events - (sequence_length + prediction_distance)
-
-    # Generate random starting positions
-    possible_starts = list(range(max_start + 1))
-    random.shuffle(possible_starts)
-
-    # Limit samples per match if specified
-    if max_samples is not None:
-        possible_starts = possible_starts[:max_samples]
-
-    for seq_start in possible_starts:
-        next_event_idx = seq_start + sequence_length + prediction_distance - 1
-        samples.append((match_id, seq_start, next_event_idx))
-
-    return samples
-
-
-@register_task("event_type_classification")
-def sample_event_type_classification(
-    match_id: str,
-    num_events: int,
-    sequence_length: int,
-    min_gap: int = 1,
-    max_gap: Optional[int] = None,
-    max_samples: Optional[int] = None,
-    events_df: Optional[pd.DataFrame] = None,
-    **kwargs
-) -> List[Tuple]:
-    """
-    Generate samples for event type classification.
-
-    Args:
-        match_id: Match ID
-        num_events: Number of events in the match
-        sequence_length: Number of events in each sequence
-        min_gap: Not used in this task but kept for API consistency
-        max_gap: Not used in this task but kept for API consistency
-        max_samples: Maximum number of samples to generate
-        events_df: DataFrame containing event data with types
-
-    Returns:
-        List of tuples: (match_id, seq_start, event_types)
-    """
-    samples = []
-
-    # Skip matches that don't have enough events
     if num_events < sequence_length:
         return samples
 
-    # If events_df is not provided, we can't determine event types
-    if events_df is None:
-        raise ValueError("events_df must be provided for event_type_classification task")
-
-    # Filter events for this match
-    match_events = events_df[events_df['match_id'] == match_id]
-
-    # Maximum starting position
+    # Maximum starting position to ensure we have enough events for the sequence and the target
     max_start = num_events - sequence_length
 
     # Generate random starting positions
@@ -423,16 +330,43 @@ def sample_event_type_classification(
         possible_starts = possible_starts[:max_samples]
 
     for seq_start in possible_starts:
-        # Get event types for the sequence
-        sequence_indices = range(seq_start, seq_start + sequence_length)
-        event_types = match_events.iloc[sequence_indices]['event_type'].values
-
-        samples.append((match_id, seq_start, event_types))
+        samples.append((match_id, seq_start))
 
     return samples
 
+@register_task_item_getter("dominating_team_classification")
+def get_item_for_dominating_team_classification(
+    sample: Tuple,
+    match_id: int,
+    embeddings: np.ndarray,
+    sequence_length: int,
+    events_df: np.ndarray
+) -> Tuple:
+    """
+    Getitem logic for next event prediction.
 
-# You can add more task functions here
+    Args:
+        sample: The sample matching the requested idx
+        match_id: Match ID
+        embeddings: Match events embeddings
+        sequence_length: Number of events in each sequence
+        events_df: DataFrame containing event embeddings with match_id column
+
+    Returns:
+        Tuple: (sample, label)
+    """
+    seq_start = sample[1]
+
+    # Get embeddings for sequence and next event
+    seq = embeddings[match_id][seq_start:seq_start + sequence_length]
+    label = get_dominating_team_label(events_df, seq_start, sequence_length)
+
+    # Convert to tensors
+    X = torch.tensor(seq, dtype=torch.float32)
+    y = torch.tensor(label, dtype=torch.long)
+
+    return X, y
+
 
 
 def create_data_loaders(
