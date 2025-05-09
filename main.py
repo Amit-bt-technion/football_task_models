@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument("--train-ratio", type=float, default=0.8, help="Proportion of matches for training")
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Proportion of matches for validation")
     parser.add_argument("--max-samples-per-match", type=int, default=10000, help="Maximum samples per match")
-    parser.add_argument("--max-samples-total", type=int, default=10000000, help="Maximum total samples")
+    parser.add_argument("--max-samples-total", type=int, default=1000000, help="Maximum total samples")
 
     # Transformer model parameters
     parser.add_argument("--transformer-heads", type=int, default=8, help="Number of attention heads")
