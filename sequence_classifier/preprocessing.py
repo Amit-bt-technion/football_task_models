@@ -16,6 +16,7 @@ from typing import Dict, Tuple, Optional, Union
 from utils.data_loading import load_match_events
 from utils.event_autoencoder import EventAutoencoder
 
+# TODO: The problem is that events_df and embeddings are not consistent in order
 
 def load_and_embed_matches(
     csv_root_dir: str,
