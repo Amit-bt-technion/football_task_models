@@ -60,7 +60,7 @@ def main(args):
     
     # Step 1: Load and embed match data
     logger.info("Loading and embedding match data...")
-    events_df, embeddings = load_and_embed_matches(
+    events_dict, embeddings_dict = load_and_embed_matches(
         csv_root_dir=args.data_dir,
         encoder_model_path=args.encoder_path,
         cache_dir=args.cache_dir,
@@ -74,8 +74,8 @@ def main(args):
     logger.info("Creating data loaders...")
     train_loader, val_loader, test_loader = create_data_loaders(
         task=args.task,
-        events_df=events_df,
-        precomputed_embeddings=embeddings,
+        events_dict=events_dict,
+        embeddings_dict=embeddings_dict,
         sequence_length=args.sequence_length,
         min_gap=args.min_gap,
         max_gap=args.max_gap,

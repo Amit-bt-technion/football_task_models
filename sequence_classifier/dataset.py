@@ -42,8 +42,8 @@ class EventSequenceDataset(Dataset):
     def __init__(
         self,
         task: str,
-        events_df: pd.DataFrame,
-        precomputed_embeddings: Dict[str, np.ndarray],
+        events_dict: Dict[str, np.ndarray],
+        embeddings_dict: Dict[str, np.ndarray],
         sequence_length: int = 10,
         min_gap: int = 1,
         max_gap: Optional[int] = None,
@@ -59,8 +59,8 @@ class EventSequenceDataset(Dataset):
         
         Args:
             task: Name of the task to determine sampling strategy
-            events_df: DataFrame containing event embeddings with match_id column
-            precomputed_embeddings: dictionary of precomputed embeddings keyed by match_id
+            events_dict: DataFrame containing event embeddings with match_id column
+            embeddings_dict: dictionary of precomputed embeddings keyed by match_id
             sequence_length: Number of events in each sequence
             min_gap: Minimum number of events between sequences
             max_gap: Maximum number of events between sequences (if None, no limit)
@@ -72,6 +72,7 @@ class EventSequenceDataset(Dataset):
             verbose: Whether to show progress bars
         """
         self.logger = logging.getLogger(__name__)
+        self.events_dict = events_dict
         self.sequence_length = sequence_length
         self.min_gap = min_gap
         self.max_gap = max_gap
@@ -80,29 +81,24 @@ class EventSequenceDataset(Dataset):
 
         # Check if task exists in registry
         assert task in TASK_REGISTRY, f"Task '{task}' not found in registry. Available tasks: {list(TASK_REGISTRY.keys())}"
-
-        # Filter by match_ids if provided
-        if match_ids is not None:
-            events_df = events_df[events_df['match_id'].isin(match_ids)]
         
         # Get unique match IDs
-        self.match_ids = events_df['match_id'].unique()
+        self.match_ids = match_ids
         self.logger.info(f"Processing {len(self.match_ids)} unique matches for task '{task}'")
         
         # Group events by match_id
         self.num_match_events = {}
         self.embeddings = {}
-        self.num_columns = events_df.shape[1] - 1  # Subtract match_id column
         
         # Organize data by match
         for match_id in tqdm(self.match_ids, desc="Organizing match data", disable=not verbose):
             
             # If no precomputed embeddings are provided, raise ValueError
-            if match_id not in precomputed_embeddings:
+            if match_id not in embeddings_dict:
                 raise ValueError(f"No embeddings for match {match_id}.")
 
             # Set events and embeddings properties
-            self.embeddings[match_id] = precomputed_embeddings[match_id]
+            self.embeddings[match_id] = embeddings_dict[match_id]
             self.num_match_events[match_id] = len(self.embeddings[match_id])
         
         # Generate samples using the task-specific function
@@ -151,7 +147,6 @@ class EventSequenceDataset(Dataset):
                 min_gap=self.min_gap,
                 max_gap=self.max_gap,
                 max_samples=max_samples_per_match,
-                events_df=events_df,
                 **self.task_params
             )
 
@@ -180,7 +175,9 @@ class EventSequenceDataset(Dataset):
         """
         sample = self.samples[idx]
         match_id = sample[0]  # First element is always match_id
-        return TASK_REGISTRY[self.task]["getitem"](sample, match_id, self.embeddings, self.sequence_length)
+        return TASK_REGISTRY[self.task]["getitem"](sample, match_id, self.embeddings, self.sequence_length,
+            events_dict=self.events_dict
+        )
 
 
 # Register task functions
@@ -257,8 +254,9 @@ def sample_chronological_order(
 def get_item_for_chronological_order(
     sample: Tuple,
     match_id: int,
-    embeddings: np.ndarray,
+    embeddings_dict: np.ndarray,
     sequence_length: int,
+    **kwargs
 ) -> Tuple:
     """
     Getitem logic for chronological order classification.
@@ -266,7 +264,7 @@ def get_item_for_chronological_order(
     Args:
         sample: The sample matching the requested idx
         match_id: Match ID
-        embeddings: Match events embeddings
+        embeddings_dict: Match events embeddings
         sequence_length: Number of events in each sequence
 
     Returns:
@@ -275,8 +273,8 @@ def get_item_for_chronological_order(
     seq1_start, seq2_start, label = sample[1:]
 
     # Get embeddings for both sequences
-    seq1 = embeddings[match_id][seq1_start:seq1_start + sequence_length]
-    seq2 = embeddings[match_id][seq2_start:seq2_start + sequence_length]
+    seq1 = embeddings_dict[match_id][seq1_start:seq1_start + sequence_length]
+    seq2 = embeddings_dict[match_id][seq2_start:seq2_start + sequence_length]
 
     # Concatenate the sequences
     concatenated = np.concatenate([seq1, seq2], axis=0)
@@ -289,7 +287,13 @@ def get_item_for_chronological_order(
 
 def get_dominating_team_label(events_df: np.ndarray, sequence_start: int, sequence_length:int) -> int:
     # TODO: @zendellll implements
-    pass
+
+    # dummy function that labels the dominating team by the number of events in which the team had possession
+    sequence_events = events_df[sequence_start:sequence_start + sequence_length]
+    possession_team_col = sequence_events[:, 12]
+    team_zero_in_possession = np.sum(possession_team_col == 0.5)
+    team_zero_one_possession = np.sum(possession_team_col == 1)
+    return int(team_zero_one_possession > team_zero_in_possession)
 
 
 @register_task_logic("dominating_team_classification")
@@ -338,9 +342,9 @@ def sample_next_dominating_team(
 def get_item_for_dominating_team_classification(
     sample: Tuple,
     match_id: int,
-    embeddings: np.ndarray,
+    embeddings_dict: Dict[str, np.ndarray],
     sequence_length: int,
-    events_df: np.ndarray
+    events_dict: Dict[str, np.ndarray],
 ) -> Tuple:
     """
     Getitem logic for next event prediction.
@@ -348,9 +352,9 @@ def get_item_for_dominating_team_classification(
     Args:
         sample: The sample matching the requested idx
         match_id: Match ID
-        embeddings: Match events embeddings
+        embeddings_dict: Match events embeddings
         sequence_length: Number of events in each sequence
-        events_df: DataFrame containing event embeddings with match_id column
+        events_dict: A dictionary of event keys and event DataFrame values
 
     Returns:
         Tuple: (sample, label)
@@ -358,8 +362,8 @@ def get_item_for_dominating_team_classification(
     seq_start = sample[1]
 
     # Get embeddings for sequence and next event
-    seq = embeddings[match_id][seq_start:seq_start + sequence_length]
-    label = get_dominating_team_label(events_df, seq_start, sequence_length)
+    seq = embeddings_dict[match_id][seq_start:seq_start + sequence_length]
+    label = get_dominating_team_label(events_dict[match_id], seq_start, sequence_length)
 
     # Convert to tensors
     X = torch.tensor(seq, dtype=torch.float32)
@@ -371,14 +375,14 @@ def get_item_for_dominating_team_classification(
 
 def create_data_loaders(
     task: str,
-    events_df: pd.DataFrame,
+    events_dict: Dict[str, np.ndarray],
     sequence_length: int = 10,
     min_gap: int = 1,
     max_gap: Optional[int] = None,
     train_ratio: float = 0.8,
     val_ratio: float = 0.1,
     batch_size: int = 32,
-    precomputed_embeddings: Optional[Dict[str, np.ndarray]] = None,
+    embeddings_dict: Optional[Dict[str, np.ndarray]] = None,
     max_samples_per_match: Optional[int] = 1000,
     max_samples_total: Optional[int] = 100000,
     num_workers: int = 4,
@@ -390,14 +394,14 @@ def create_data_loaders(
     
     Args:
         task: Name of the task to determine sampling strategy
-        events_df: DataFrame containing event embeddings with match_id column
+        events_dict: Dictionary match_id to events DataFrame
         sequence_length: Number of events in each sequence
         min_gap: Minimum number of events between sequences
         max_gap: Maximum number of events between sequences
         train_ratio: Proportion of matches to use for training
         val_ratio: Proportion of matches to use for validation
         batch_size: Batch size for data loaders
-        precomputed_embeddings: Optional dictionary of precomputed embeddings
+        embeddings_dict: Optional dictionary of precomputed embeddings
         max_samples_per_match: Maximum samples to generate per match
         max_samples_total: Maximum total samples
         num_workers: Number of workers for data loading
@@ -415,10 +419,10 @@ def create_data_loaders(
 
     # For tasks that need the events_df
     if task == "event_type_classification":
-        task_params['events_df'] = events_df
+        task_params['events_df'] = events_dict
 
     # Get unique match IDs and shuffle them
-    match_ids = events_df['match_id'].unique().tolist()
+    match_ids = list(events_dict.keys())
     random.shuffle(match_ids)
     
     # Split match IDs into train, validation, and test sets
@@ -435,7 +439,7 @@ def create_data_loaders(
 
     # Create datasets
     train_dataset = EventSequenceDataset(
-        events_df=events_df,
+        events_dict=events_dict,
         sequence_length=sequence_length,
         min_gap=min_gap,
         max_gap=max_gap,
@@ -443,14 +447,14 @@ def create_data_loaders(
         shuffle=True,
         max_samples_per_match=max_samples_per_match,
         max_total_samples=max_samples_total,
-        precomputed_embeddings=precomputed_embeddings,
+        embeddings_dict=embeddings_dict,
         task=task,
         task_params=task_params,
         verbose=verbose
     )
     
     val_dataset = EventSequenceDataset(
-        events_df=events_df,
+        events_dict=events_dict,
         sequence_length=sequence_length,
         min_gap=min_gap,
         max_gap=max_gap,
@@ -458,14 +462,14 @@ def create_data_loaders(
         shuffle=True,
         max_samples_per_match=max_samples_per_match // 2,  # Use fewer samples for validation
         max_total_samples=max_samples_total // 10,  # Use fewer samples for validation
-        precomputed_embeddings=precomputed_embeddings,
+        embeddings_dict=embeddings_dict,
         task=task,
         task_params=task_params,
         verbose=verbose
     )
     
     test_dataset = EventSequenceDataset(
-        events_df=events_df,
+        events_dict=events_dict,
         sequence_length=sequence_length,
         min_gap=min_gap,
         max_gap=max_gap,
@@ -473,7 +477,7 @@ def create_data_loaders(
         shuffle=False,  # Don't shuffle test set
         max_samples_per_match=max_samples_per_match // 2,  # Use fewer samples for testing
         max_total_samples=max_samples_total // 10,  # Use fewer samples for testing
-        precomputed_embeddings=precomputed_embeddings,
+        embeddings_dict=embeddings_dict,
         task=task,
         task_params=task_params,
         verbose=verbose

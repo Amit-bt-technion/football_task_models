@@ -41,7 +41,7 @@ def load_and_embed_matches(
         verbose: Whether to show progress bars
         
     Returns:
-        Tuple of (DataFrame with match_id column, Dictionary of match embeddings)
+        Tuple of (Dictionary of match events, Dictionary of match embeddings)
     """
     logger = logging.getLogger(__name__)
     
@@ -70,8 +70,9 @@ def load_and_embed_matches(
     match_ids = events_df["match_id"].unique()
     logger.info(f"Found {len(match_ids)} matches")
 
-    # Create embeddings dictionary
-    embeddings = {}
+    # Create embeddings and events dictionaries
+    embeddings_by_match = {}
+    events_by_match = {}
     
     # Load the encoder model
     input_dim = events_df.shape[1] - 1 # removing match_id column later
@@ -82,14 +83,17 @@ def load_and_embed_matches(
     
     # Process each match
     for match_id in tqdm(match_ids, desc="Processing matches", disable=not verbose):
-        cache_path = None
+        embeddings_cache_path = None
+        events_cache_path = None
         if cache_dir:
-            cache_path = Path(cache_dir) / f"{match_id}.npy"
-            
+            embeddings_cache_path = Path(cache_dir) / f"{match_id}_embeddings.npy"
+            events_cache_path = Path(cache_dir) / f"{match_id}_events.npy"
+
         # Check if embeddings are cached
-        if cache_path and cache_path.exists() and not force_recompute:
+        if embeddings_cache_path and events_cache_path and embeddings_cache_path.exists() and not force_recompute:
             # Load from cache
-            embeddings[match_id] = np.load(cache_path)
+            embeddings_by_match[match_id] = np.load(embeddings_cache_path)
+            events_by_match[match_id] = np.load(events_cache_path)
             logger.debug(f"Loaded cached embeddings for match {match_id}")
         else:
             # Filter events for this match
@@ -97,10 +101,13 @@ def load_and_embed_matches(
             
             # Drop the match_id column
             match_data = match_df.drop(columns=["match_id"]).values
-            
+
+            # Add events to events_by_match
+            events_by_match[match_id] = match_data.copy()
+
             # Convert to tensor
             match_tensor = torch.tensor(match_data, dtype=torch.float32)
-            
+
             # Embed in batches
             match_embeddings = []
             with torch.no_grad():
@@ -110,14 +117,15 @@ def load_and_embed_matches(
                     match_embeddings.append(batch_embeddings)
             
             # Combine batches
-            embeddings[match_id] = np.vstack(match_embeddings)
+            embeddings_by_match[match_id] = np.vstack(match_embeddings)
             
             # Cache embeddings
-            if cache_path:
-                np.save(cache_path, embeddings[match_id])
-                logger.debug(f"Cached embeddings for match {match_id}")
+            if embeddings_cache_path:
+                np.save(embeddings_cache_path, embeddings_by_match[match_id])
+                np.save(events_cache_path, events_by_match[match_id])
+                logger.debug(f"Cached embeddings and events for match {match_id}")
     
-    return events_df, embeddings
+    return events_by_match, embeddings_by_match
 
 
 def get_class_weights(dataset_or_loader: Union[torch.utils.data.Dataset, torch.utils.data.DataLoader]) -> torch.Tensor:
