@@ -285,15 +285,40 @@ def get_item_for_chronological_order(
 
     return X, y
 
-def get_dominating_team_label(events_df: np.ndarray, sequence_start: int, sequence_length:int) -> int:
-    # TODO: @zendellll implements
+def get_dominating_team_label(
+    events_df: np.ndarray, 
+    sequence_start: int, 
+    sequence_length:int) 
+-> int:
+    """
+    Determine which team (0 or 1) accumulated more possession-time
+    over a sequence of events.
 
-    # dummy function that labels the dominating team by the number of events in which the team had possession
-    sequence_events = events_df[sequence_start:sequence_start + sequence_length]
-    possession_team_col = sequence_events[:, 12]
-    team_zero_in_possession = np.sum(possession_team_col == 0.5)
-    team_zero_one_possession = np.sum(possession_team_col == 1)
-    return int(team_zero_one_possession > team_zero_in_possession)
+    Assumption:
+      • column 4  = event duration (in seconds)
+      • column 12 = possession_team.id (0 or 1)
+
+    Args:
+        events_df:       full events array
+        sequence_start:  index of first event in the sequence
+        sequence_length: how many events to include
+
+    Returns:
+        0 if team 0’s total duration ≥ team 1’s; else 1
+    """
+
+    seq = events_df[sequence_start : sequence_start + sequence_length]
+
+    # Extract durations & possession labels
+    durations   = seq[:, 4].astype(float)   # col 4
+    possession  = seq[:,12].astype(int)     # col 12
+
+    # Sum for each team
+    team0_time = durations[possession == 0].sum()
+    team1_time = durations[possession == 1].sum()
+
+    # Label = 1 if team 1 strictly leads, else 0
+    return int(team1_time > team0_time)
 
 
 @register_task_logic("dominating_team_classification")
