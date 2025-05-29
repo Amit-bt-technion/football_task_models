@@ -137,7 +137,7 @@ class ContinuousValueTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(1, 1, embedding_dim))
         
         # Final classifier for the [CLS] token representation
-        self.classifier = nn.Sequential(
+        self.predictor = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
