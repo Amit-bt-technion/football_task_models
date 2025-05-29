@@ -172,5 +172,5 @@ class ContinuousValueTransformer(nn.Module):
         cls_representation = x[:, 0]
 
         # Classify
-        logits = self.classifier(cls_representation)
+        logits = self.predictor(cls_representation)
         return logits
