@@ -13,8 +13,11 @@ from pathlib import Path
 
 from sequence_classifier.dataset import create_data_loaders
 from sequence_classifier.preprocessing import load_and_embed_matches, get_class_weights
-from sequence_classifier.sequence_transformer import EventSequenceTransformer
+from sequence_classifier.sequence_transformer import EventSequenceTransformer, ContinuousValueTransformer
 from sequence_classifier.training import train_model, evaluate_model, plot_training_history
+from sequence_classifier.regression_training import train_model as train_regression_model
+from sequence_classifier.regression_training import evaluate_model as evaluate_regression_model
+from sequence_classifier.regression_training import plot_training_history as plot_regression_history
 
 
 def setup_logging(log_level=logging.INFO) -> None:
@@ -94,13 +97,24 @@ def main(args):
     
     # Step 3: Create model
     logger.info("Creating model...")
-    model = EventSequenceTransformer(
-        embedding_dim=32,  # Matches the latent dim from the encoder
-        nhead=args.transformer_heads,
-        num_encoder_layers=args.transformer_layers,
-        dim_feedforward=args.transformer_dim_feedforward,
-        dropout=args.dropout
-    )
+    if args.model_type == 'classification':
+        # Classification model
+        model = EventSequenceTransformer(
+            embedding_dim=32,  # Matches the latent dim from the encoder
+            nhead=args.transformer_heads,
+            num_encoder_layers=args.transformer_layers,
+            dim_feedforward=args.transformer_dim_feedforward,
+            dropout=args.dropout
+        )
+    else:
+        # Regression model
+        model = ContinuousValueTransformer(
+            embedding_dim=32,  # Matches the latent dim from the encoder
+            nhead=args.transformer_heads,
+            num_encoder_layers=args.transformer_layers,
+            dim_feedforward=args.transformer_dim_feedforward,
+            dropout=args.dropout
+        )
     
     # Log model architecture
     logger.info(f"Model architecture:\n{model}")
@@ -108,22 +122,41 @@ def main(args):
     # Step 4: Train model
     if not args.skip_training:
         logger.info("Training model...")
-        model, history = train_model(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            num_epochs=args.epochs,
-            learning_rate=args.learning_rate,
-            weight_decay=args.weight_decay,
-            patience=args.patience,
-            clip_grad_norm=args.clip_grad_norm,
-            checkpoint_dir=args.checkpoint_dir,
-            device=device
-        )
+        if args.model_type == 'classification':
+            # Classification training
+            model, history = train_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+                patience=args.patience,
+                clip_grad_norm=args.clip_grad_norm,
+                checkpoint_dir=args.checkpoint_dir,
+                device=device
+            )
+        else:
+            # Regression training
+            model, history = train_regression_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=args.epochs,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+                patience=args.patience,
+                clip_grad_norm=args.clip_grad_norm,
+                checkpoint_dir=args.checkpoint_dir,
+                device=device
+            )
         
         # Plot training history
         plot_path = Path(args.artifacts_dir) / "training_history.png"
-        plot_training_history(history, save_path=plot_path)
+        if args.model_type == 'classification':
+            plot_training_history(history, save_path=plot_path)
+        else:
+            plot_regression_history(history, save_path=plot_path)
         logger.info(f"Training history plot saved to {plot_path}")
         
         # Save final model
@@ -144,7 +177,10 @@ def main(args):
                 logger.warning(f"No best model found at {best_model_path}. Using the current model.")
         
         logger.info("Evaluating model...")
-        metrics = evaluate_model(model, test_loader, device=device)
+        if args.model_type == 'classification':
+            metrics = evaluate_model(model, test_loader, device=device)
+        else:
+            metrics = evaluate_regression_model(model, test_loader, device=device)
         
         # Save metrics
         metrics_path = Path(args.artifacts_dir) / "test_metrics.txt"
