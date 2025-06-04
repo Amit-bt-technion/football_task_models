@@ -293,8 +293,8 @@ def get_item_for_chronological_order(
 def get_dominating_team_label(
     events_df: np.ndarray, 
     sequence_start: int, 
-    sequence_length:int) 
--> int:
+    sequence_length:int
+) -> int:
     """
     Determine which team (0 or 1) accumulated more possession-time
     over a sequence of events.
