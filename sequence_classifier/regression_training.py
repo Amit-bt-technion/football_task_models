@@ -47,6 +47,10 @@ def train_epoch(
     for batch_idx, (sequences, targets) in enumerate(tqdm(dataloader, desc="Training", leave=False)):
         sequences, targets = sequences.to(device), targets.to(device)
         
+        # Ensure targets have the right shape for regression
+        if targets.dim() == 1:
+            targets = targets.unsqueeze(1)  # Convert [batch_size] to [batch_size, 1]
+        
         # Forward pass
         optimizer.zero_grad()
         outputs = model(sequences)
@@ -99,6 +103,10 @@ def validate(
     with torch.no_grad():
         for sequences, targets in tqdm(dataloader, desc="Validating", leave=False):
             sequences, targets = sequences.to(device), targets.to(device)
+            
+            # Ensure targets have the right shape for regression
+            if targets.dim() == 1:
+                targets = targets.unsqueeze(1)  # Convert [batch_size] to [batch_size, 1]
             
             # Forward pass
             outputs = model(sequences)
@@ -283,6 +291,10 @@ def evaluate_model(
         for sequences, targets in tqdm(test_loader, desc="Testing"):
             sequences, targets = sequences.to(device), targets.to(device)
             
+            # Ensure targets have the right shape for regression
+            if targets.dim() == 1:
+                targets = targets.unsqueeze(1)  # Convert [batch_size] to [batch_size, 1]
+            
             # Forward pass
             outputs = model(sequences)
             
@@ -294,9 +306,10 @@ def evaluate_model(
             total_mae += mae * targets.size(0)
             total += targets.size(0)
             
-            # Save predictions and targets
-            all_targets.extend(targets.cpu().numpy())
-            all_predictions.extend(outputs.cpu().numpy())
+            # Save predictions and targets for later analysis
+            # Flatten outputs and targets for correlation calculation
+            all_targets.extend(targets.view(-1).cpu().numpy())
+            all_predictions.extend(outputs.view(-1).cpu().numpy())
     
     # Calculate average metrics
     avg_mse = total_mse / total

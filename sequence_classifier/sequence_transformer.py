@@ -110,10 +110,10 @@ class EventSequenceTransformer(nn.Module):
 
 class ContinuousValueTransformer(nn.Module):
     """
-    Transformer model for classifying the chronological order of two event sequences.
+    Transformer model for regression prediction of continuous values between 0 and 1.
     """
     def __init__(self, embedding_dim=32, nhead=8, num_encoder_layers=6, dim_feedforward=2048, dropout=0.1):
-        super(EventSequenceTransformer, self).__init__()
+        super(ContinuousValueTransformer, self).__init__()
         
         self.embedding_dim = embedding_dim
         
@@ -136,24 +136,24 @@ class ContinuousValueTransformer(nn.Module):
         # By the final layer, the representation of this token serves as a summary of the entire input
         self.cls_token = nn.Parameter(torch.randn(1, 1, embedding_dim))
         
-        # Final classifier for the [CLS] token representation
+        # Final predictor for the [CLS] token representation
         self.predictor = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(embedding_dim, 1)
+            nn.Linear(embedding_dim, 1),
             nn.Sigmoid()    # [0,1]
         )
         
     def forward(self, x, src_mask=None):
         """
         Args:
-            x: Tensor of shape [batch_size, 2*seq_len, embedding_dim]
-                Contains concatenated sequences to be classified
+            x: Tensor of shape [batch_size, seq_len, embedding_dim]
+                Contains sequence to be processed
             src_mask: Optional mask for the transformer
         
         Returns:
-            Classification logits (0 = first sequence is before second, 1 = second is before first)
+            Regression output as a tensor of shape [batch_size, 1] with values in range [0,1]
         """
         batch_size = x.size(0)
 
@@ -167,10 +167,10 @@ class ContinuousValueTransformer(nn.Module):
         # Apply transformer encoder - self-attention mechanism processes the entire sequence, allowing events to contextualize each other
         x = self.transformer_encoder(x, src_mask)
 
-        # Use the [CLS] token representation for classification
-        # Only the first position (CLS token) representation is used for classification as it serves as a summary of the entire input by the final layer
+        # Use the [CLS] token representation for regression
+        # Only the first position (CLS token) representation is used as it serves as a summary of the entire input
         cls_representation = x[:, 0]
 
-        # Classify
+        # Predict continuous value
         logits = self.predictor(cls_representation)
         return logits

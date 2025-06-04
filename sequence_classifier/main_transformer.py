@@ -53,6 +53,15 @@ def main(args):
     # Set random seed for reproducibility
     set_seed(args.seed)
     
+    # Check for task and model_type compatibility
+    if args.model_type == 'classification' and 'regression' in args.task:
+        logger.error(f"Incompatible configuration: Cannot use classification model with regression task '{args.task}'")
+        return 1
+    
+    if args.model_type == 'regression' and 'regression' not in args.task:
+        logger.error(f"Incompatible configuration: Cannot use regression model with classification task '{args.task}'")
+        return 1
+    
     # Ensure output directories exist
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.artifacts_dir, exist_ok=True)
