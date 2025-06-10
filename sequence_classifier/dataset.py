@@ -15,6 +15,11 @@ from tqdm import tqdm
 
 # Task registry to store sampling and labeling functions
 TASK_REGISTRY = {}
+# Assumptions:
+#   • column 4  = event duration (in seconds)
+#   • column 12 = possession_team.id (0 or 1)
+DURATION_COLUMN = 4
+POSSESSION_TEAM_ID_COLUMN = 12
 
 
 def register_task_logic(task_name):
@@ -294,24 +299,21 @@ def get_dominating_team_label(
     Determine which team (0 or 1) accumulated more possession-time
     over a sequence of events.
 
-    Assumption:
-      • column 4  = event duration (in seconds)
-      • column 12 = possession_team.id (0 or 1)
-
     Args:
         events_df:       full events array
         sequence_start:  index of first event in the sequence
         sequence_length: how many events to include
 
     Returns:
-        0 if team 0’s total duration ≥ team 1’s; else 1
+        0 if team 0's total duration ≥ team 1's; else 1
+        If total time is 0, 0.0 is returned.
     """
 
     seq = events_df[sequence_start : sequence_start + sequence_length]
 
     # Extract durations & possession labels
-    durations   = seq[:, 4].astype(float)   # col 4
-    possession  = seq[:,12].astype(int)     # col 12
+    durations   = seq[:, DURATION_COLUMN].astype(float)   # col 4
+    possession  = seq[:,POSSESSION_TEAM_ID_COLUMN].astype(int)     # col 12
 
     # Sum for each team
     team0_time = durations[possession == 0].sum()
@@ -320,8 +322,42 @@ def get_dominating_team_label(
     # Label = 1 if team 1 strictly leads, else 0
     return int(team1_time > team0_time)
 
+def get_team0_possession_percentage(
+    events_df: np.ndarray, 
+    sequence_start: int, 
+    sequence_length: int
+) -> float:
+    """
+    Calculate the percentage of time team 0 was in possession
+    over a sequence of events.
+    
+    Args:
+        events_df:       full events array
+        sequence_start:  index of first event in the sequence
+        sequence_length: how many events to include
+    
+    Returns:
+        Float between 0.0 and 1.0 representing team 0's possession percentage.
+    """
+    seq = events_df[sequence_start : sequence_start + sequence_length]
+    
+    # Extract durations & possession labels
+    durations = seq[:, DURATION_COLUMN].astype(float)
+    possession = seq[:, POSSESSION_TEAM_ID_COLUMN].astype(int)   # col 12
+    
+    # Calculate total time and team 0's time
+    total_time = durations.sum()
+    team0_time = durations[possession == 0].sum()
+    
+    # Return percentage (handle division by zero)
+    if total_time == 0:
+        return 0.0
+    
+    return team0_time / total_time
+
 
 @register_task_logic("dominating_team_classification")
+@register_task_logic("dominating_team_regression")
 def sample_next_dominating_team(
     match_id: str,
     num_events: int,
@@ -331,6 +367,7 @@ def sample_next_dominating_team(
 ) -> List[Tuple]:
     """
     Generate samples for dominating team prediction.
+    Used for both classification and regression tasks.
 
     Args:
         match_id: Match ID
@@ -339,7 +376,7 @@ def sample_next_dominating_team(
         max_samples: Maximum number of samples to generate
 
     Returns:
-        List of tuples: (match_id, seq_start, next_event_idx)
+        List of tuples: (match_id, seq_start)
     """
     samples = []
 
@@ -396,7 +433,41 @@ def get_item_for_dominating_team_classification(
 
     return X, y
 
+@register_task_item_getter("dominating_team_regression")
+def get_item_for_dominating_team_regression(
+    sample: Tuple,
+    match_id: int,
+    embeddings_dict: Dict[str, np.ndarray],
+    sequence_length: int,
+    events_dict: Dict[str, np.ndarray],
+) -> Tuple:
+    """
+    Getitem logic for dominating team regression.
 
+    Args:
+        sample: The sample matching the requested idx
+        match_id: Match ID
+        embeddings_dict: Match events embeddings
+        sequence_length: Number of events in each sequence
+        events_dict: A dictionary of event keys and event DataFrame values
+
+    Returns:
+        Tuple: (sample, label) where label is a float between 0 and 1
+        representing team 0's possession percentage
+    """
+    seq_start = sample[1]
+
+    # Get embeddings for sequence
+    seq = embeddings_dict[match_id][seq_start:seq_start + sequence_length]
+    
+    # Get the possession percentage for team 0 as the regression target
+    label = get_team0_possession_percentage(events_dict[match_id], seq_start, sequence_length)
+
+    # Convert to tensors
+    X = torch.tensor(seq, dtype=torch.float32)
+    y = torch.tensor(label, dtype=torch.float32)  # Note: using float32 for regression
+
+    return X, y
 
 def create_data_loaders(
     task: str,

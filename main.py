@@ -7,6 +7,8 @@ if __name__ == "__main__":
 
     # Task parameters
     parser.add_argument("--task", type=str, required=True, choices=TASK_REGISTRY.keys(), help="Task to train the model for")
+    parser.add_argument("--model-type", type=str, default="regression", choices=["classification", "regression"], 
+                        help="Type of model to train (classification or regression)")
 
     # Data and model paths
     parser.add_argument("--data-dir", type=str, default="../match_csv", help="Directory containing match CSV files")
