@@ -356,6 +356,7 @@ def get_team0_possession_percentage(
     return team0_time / total_time
 
 
+@register_task_logic("random_classification")
 @register_task_logic("dominating_team_classification")
 @register_task_logic("dominating_team_regression")
 def sample_next_dominating_team(
@@ -466,6 +467,40 @@ def get_item_for_dominating_team_regression(
     # Convert to tensors
     X = torch.tensor(seq, dtype=torch.float32)
     y = torch.tensor(label, dtype=torch.float32)  # Note: using float32 for regression
+
+    return X, y
+
+@register_task_item_getter("random_classification")
+def get_item_for_random_classification(
+    sample: Tuple,
+    match_id: int,
+    embeddings_dict: Dict[str, np.ndarray],
+    sequence_length: int,
+    events_dict: Dict[str, np.ndarray],
+) -> Tuple:
+    """
+    Getitem logic for random classification of sequences, used to validate pipeline correctness and set a baseline.
+
+    Args:
+        sample: The sample matching the requested idx
+        match_id: Match ID
+        embeddings_dict: Match events embeddings
+        sequence_length: Number of events in each sequence
+        events_dict: A dictionary of event keys and event DataFrame values
+
+    Returns:
+        Tuple: (sample, label)
+    """
+    from random import randint
+    seq_start = sample[1]
+
+    # Get embeddings for sequence and next event
+    seq = embeddings_dict[match_id][seq_start:seq_start + sequence_length]
+    label = randint(0, 1)
+
+    # Convert to tensors
+    X = torch.tensor(seq, dtype=torch.float32)
+    y = torch.tensor(label, dtype=torch.long)
 
     return X, y
 
