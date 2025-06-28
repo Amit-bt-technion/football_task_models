@@ -504,6 +504,136 @@ def get_item_for_random_classification(
 
     return X, y
 
+def is_shot_event(event_vector: np.ndarray) -> bool:
+    """
+    Check if an event is a shot event (type_id = 16).
+    
+    Args:
+        event_vector: Tokenized event vector
+        
+    Returns:
+        True if the event is a shot, False otherwise
+    """
+    # The event type is stored at index 0 and shot events have value 16
+    # From tokenized_eventpy.py: event_ids['shot'] = 16
+    # The list of event_ids values is used in CategoricalFeatureParser
+    # Shot event_id 16 is the 10th unique value in the sorted list, so normalized as (position)/total
+    # Let's use a more robust approach - check if it's close to the expected normalized value
+    shot_event_normalized = 10 / 44  # Shot is the 10th value out of 44 possible event types
+    return abs(event_vector[0] - shot_event_normalized) < 0.02  # Allow some tolerance
+
+
+def extract_goal_label_from_shot(event_vector: np.ndarray) -> int:
+    """
+    Extract binary goal label from shot event outcome.id field.
+    
+    Args:
+        event_vector: Tokenized shot event vector
+        
+    Returns:
+        1 if goal, 0 if not goal
+    """
+    # shot.outcome.id is at index 83 in the tokenized vector
+    # The outcome values are [96, 97, 98, 99, 100, 101, 115, 116]
+    # Value 97 represents a goal and is the 2nd value (index 1), so it's parsed as 2/8 = 0.25
+    outcome_value = event_vector[83]
+    
+    # Check if it's close to 0.25 (goal value)
+    goal_value_normalized = 2/8  # 0.25
+    return 1 if abs(outcome_value - goal_value_normalized) < 0.01 else 0
+
+
+@register_task_logic("xg_prediction")
+def sample_xg_sequences(
+    match_id: str,
+    num_events: int,
+    sequence_length: int,
+    min_gap: int,
+    max_gap: Optional[int] = None,
+    max_samples: Optional[int] = None,
+    **kwargs
+) -> List[Tuple]:
+    """
+    Generate sequences ending with shot events for xG prediction.
+    
+    Args:
+        match_id: Match ID
+        num_events: Number of events in the match
+        sequence_length: Number of events in each sequence (should be 200)
+        min_gap: Minimum number of events between sequences (not used for xG)
+        max_gap: Maximum number of events between sequences (not used for xG)
+        max_samples: Maximum number of samples to generate
+        
+    Returns:
+        List of tuples: (match_id, sequence_end_index, goal_label)
+    """
+    samples = []
+    
+    # Skip matches that don't have enough events
+    if num_events < sequence_length:
+        return samples
+    
+    # Find all shot events in the match
+    shot_indices = []
+    events_dict = kwargs.get('events_dict', {})
+    
+    if match_id in events_dict:
+        match_events = events_dict[match_id]
+        
+        for i in range(sequence_length - 1, num_events):  # Ensure we have enough preceding events
+            event_vector = match_events[i]
+            if is_shot_event(event_vector):
+                goal_label = extract_goal_label_from_shot(event_vector)
+                shot_indices.append((i, goal_label))
+    
+    # Limit samples if specified
+    if max_samples is not None and len(shot_indices) > max_samples:
+        # Take a random sample to maintain balance
+        random.shuffle(shot_indices)
+        shot_indices = shot_indices[:max_samples]
+    
+    # Create samples: sequences ending with shot events
+    for shot_idx, goal_label in shot_indices:
+        samples.append((match_id, shot_idx, goal_label))
+    
+    return samples
+
+
+@register_task_item_getter("xg_prediction")
+def get_item_for_xg_prediction(
+    sample: Tuple,
+    match_id: str,
+    embeddings_dict: Dict[str, np.ndarray],
+    sequence_length: int,
+    events_dict: Dict[str, np.ndarray],
+    **kwargs
+) -> Tuple:
+    """
+    Getitem logic for xG prediction.
+    
+    Args:
+        sample: The sample tuple (match_id, sequence_end_index, goal_label)
+        match_id: Match ID
+        embeddings_dict: Match events embeddings (already masked)
+        sequence_length: Number of events in each sequence
+        events_dict: Dictionary of event arrays by match_id
+        
+    Returns:
+        Tuple: (sequence_tensor, goal_label_tensor)
+    """
+    sequence_end_idx, goal_label = sample[1], sample[2]
+    
+    # Extract sequence ending with the shot event
+    sequence_start = sequence_end_idx - sequence_length + 1
+    seq = embeddings_dict[match_id][sequence_start:sequence_end_idx + 1]
+    
+    # Convert to tensors
+    X = torch.tensor(seq, dtype=torch.float32)
+    y = torch.tensor(goal_label, dtype=torch.float32)  # Float for regression output
+    
+    return X, y
+
+
 def create_data_loaders(
     task: str,
     events_dict: Dict[str, np.ndarray],
@@ -551,6 +681,10 @@ def create_data_loaders(
     # For tasks that need the events_df
     if task == "event_type_classification":
         task_params['events_df'] = events_dict
+    
+    # For xG prediction task, pass events_dict for shot detection
+    if task == "xg_prediction":
+        task_params['events_dict'] = events_dict
 
     # Get unique match IDs and shuffle them
     match_ids = list(events_dict.keys())

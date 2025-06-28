@@ -54,11 +54,18 @@ def main(args):
     set_seed(args.seed)
     
     # Check for task and model_type compatibility
-    if args.model_type == 'classification' and 'regression' in args.task:
+    # Define which tasks are regression tasks
+    regression_tasks = ['xg_prediction', 'dominating_team_regression']
+    classification_tasks = ['event_type_classification', 'random_classification', 'dominating_team_classification']
+    
+    is_regression_task = args.task in regression_tasks or 'regression' in args.task
+    is_classification_task = args.task in classification_tasks or 'classification' in args.task
+    
+    if args.model_type == 'classification' and is_regression_task:
         logger.error(f"Incompatible configuration: Cannot use classification model with regression task '{args.task}'")
         return 1
     
-    if args.model_type == 'regression' and 'regression' not in args.task:
+    if args.model_type == 'regression' and is_classification_task:
         logger.error(f"Incompatible configuration: Cannot use regression model with classification task '{args.task}'")
         return 1
     
@@ -70,6 +77,21 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     logger.info(f"Using device: {device}")
     
+    # Log task configuration
+    if args.task == 'xg_prediction':
+        logger.info(f"Using regression model for xG prediction task (predicting goal probability)")
+    
+    # Determine mask_list based on task
+    mask_list = None
+    if args.task == "xg_prediction":
+        # Masked fields for shot events: end_location[0,1,2], statsbomb_xg, deflected, outcome.id
+        # Based on tokenized_event.py shot event structure starting at index 71:
+        # 71: shot.type.id, 72: end_location[0], 73: end_location[1], 74: end_location[2], 
+        # 75: aerial_won, 76: follows_dribble, 77: first_time, 78: open_goal,
+        # 79: statsbomb_xg, 80: deflected, 81: technique.id, 82: body_part.id, 83: outcome.id
+        mask_list = [72, 73, 74, 79, 80, 83]  # end_location[0,1,2], statsbomb_xg, deflected, outcome.id
+        logger.info(f"Using mask_list for xG prediction: {mask_list}")
+    
     # Step 1: Load and embed match data
     logger.info("Loading and embedding match data...")
     events_dict, embeddings_dict = load_and_embed_matches(
@@ -79,7 +101,9 @@ def main(args):
         device=device,
         batch_size=args.batch_size,
         force_recompute=args.force_recompute,
-        verbose=not args.quiet
+        verbose=not args.quiet,
+        mask_list=mask_list,
+        task=args.task
     )
     
     # Step 2: Create data loaders

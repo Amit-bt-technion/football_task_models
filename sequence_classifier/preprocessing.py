@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict, Tuple, Optional, Union
+from typing import Dict, Tuple, Optional, Union, List
 
 from utils.data_loading import load_match_events
 from utils.event_autoencoder import EventAutoencoder
@@ -25,7 +25,9 @@ def load_and_embed_matches(
     device: Optional[torch.device] = None,
     batch_size: int = 128,
     force_recompute: bool = False,
-    verbose: bool = True
+    verbose: bool = True,
+    mask_list: Optional[List[int]] = None,
+    task: Optional[str] = None
 ) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
     """
     Load all match events, embed them using the pretrained autoencoder,
@@ -39,6 +41,8 @@ def load_and_embed_matches(
         batch_size: Batch size for embedding
         force_recompute: Force recomputation of embeddings even if cached
         verbose: Whether to show progress bars
+        mask_list: List of column indices to mask (set to 0) before embedding
+        task: Task name for task-specific caching (e.g., 'xg_prediction')
         
     Returns:
         Tuple of (Dictionary of match events, Dictionary of match embeddings)
@@ -69,6 +73,12 @@ def load_and_embed_matches(
     # Get unique match IDs
     match_ids = events_df["match_id"].unique()
     logger.info(f"Found {len(match_ids)} matches")
+    
+    # Log masking and task information
+    if task:
+        logger.info(f"Using task-specific caching for task: '{task}'")
+    if mask_list is not None:
+        logger.info(f"Will apply masking to {len(mask_list)} columns before embedding: {mask_list}")
 
     # Create embeddings and events dictionaries
     embeddings_by_match = {}
@@ -86,27 +96,49 @@ def load_and_embed_matches(
         embeddings_cache_path = None
         events_cache_path = None
         if cache_dir:
-            embeddings_cache_path = Path(cache_dir) / f"{match_id}_embeddings.npy"
-            events_cache_path = Path(cache_dir) / f"{match_id}_events.npy"
+            # Use task-specific cache files for embeddings if task is provided
+            task_suffix = f"_{task}" if task else ""
+            embeddings_cache_path = Path(cache_dir) / f"{match_id}_embeddings{task_suffix}.npy"
+            events_cache_path = Path(cache_dir) / f"{match_id}_events.npy"  # Events are always the same
 
-        # Check if embeddings are cached
-        if embeddings_cache_path and events_cache_path and embeddings_cache_path.exists() and not force_recompute:
-            # Load from cache
+        # Check if embeddings are cached (task-specific caching ensures consistency)
+        use_cached_embeddings = (embeddings_cache_path and embeddings_cache_path.exists() and not force_recompute)
+        use_cached_events = (events_cache_path and events_cache_path.exists() and not force_recompute)
+        
+        if use_cached_embeddings and use_cached_events:
+            # Load both from cache
             embeddings_by_match[match_id] = np.load(embeddings_cache_path)
             events_by_match[match_id] = np.load(events_cache_path)
-            logger.debug(f"Loaded cached embeddings for match {match_id}")
+            cache_info = f"task='{task}'" if task else "default"
+            logger.debug(f"Loaded cached embeddings and events for match {match_id} ({cache_info})")
         else:
-            # Filter events for this match
-            match_df = events_df[events_df["match_id"] == match_id]
-            
-            # Drop the match_id column
-            match_data = match_df.drop(columns=["match_id"]).values
+            # Load events from cache if available, otherwise compute from events_df
+            if use_cached_events:
+                events_by_match[match_id] = np.load(events_cache_path)
+                match_data = events_by_match[match_id]
+                if not use_cached_embeddings:
+                    cache_info = f"task='{task}'" if task else "default"
+                    logger.debug(f"Loaded cached events for match {match_id}, will compute embeddings for {cache_info}")
+            else:
+                # Filter events for this match and process
+                match_df = events_df[events_df["match_id"] == match_id]
+                # Drop the match_id column
+                match_data = match_df.drop(columns=["match_id"]).values
+                # Add events to events_by_match (full unmasked data for label extraction)
+                events_by_match[match_id] = match_data.copy()
 
-            # Add events to events_by_match
-            events_by_match[match_id] = match_data.copy()
+            # Apply masking if mask_list is provided (only for embedding, not for label extraction)
+            match_data_for_embedding = match_data.copy()
+            if mask_list is not None:
+                logger.debug(f"Applying masking to {len(mask_list)} columns for match {match_id}")
+                for mask_idx in mask_list:
+                    if mask_idx < match_data_for_embedding.shape[1]:
+                        match_data_for_embedding[:, mask_idx] = 0.0
+                    else:
+                        logger.warning(f"Mask index {mask_idx} is out of bounds for {match_data_for_embedding.shape[1]} columns")
 
-            # Convert to tensor
-            match_tensor = torch.tensor(match_data, dtype=torch.float32)
+            # Convert to tensor (using masked data for embedding)
+            match_tensor = torch.tensor(match_data_for_embedding, dtype=torch.float32)
 
             # Embed in batches
             match_embeddings = []
@@ -119,11 +151,15 @@ def load_and_embed_matches(
             # Combine batches
             embeddings_by_match[match_id] = np.vstack(match_embeddings)
             
-            # Cache embeddings
-            if embeddings_cache_path:
-                np.save(embeddings_cache_path, embeddings_by_match[match_id])
-                np.save(events_cache_path, events_by_match[match_id])
-                logger.debug(f"Cached embeddings and events for match {match_id}")
+            # Cache embeddings and events if not already cached
+            if cache_dir:
+                if not use_cached_embeddings:
+                    np.save(embeddings_cache_path, embeddings_by_match[match_id])
+                    cache_info = f"task='{task}'" if task else "default"
+                    logger.debug(f"Cached embeddings for match {match_id} ({cache_info})")
+                if not use_cached_events:
+                    np.save(events_cache_path, events_by_match[match_id])
+                    logger.debug(f"Cached events for match {match_id}")
     
     return events_by_match, embeddings_by_match
 
