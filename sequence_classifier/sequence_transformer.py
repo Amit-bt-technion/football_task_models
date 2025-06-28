@@ -107,3 +107,70 @@ class EventSequenceTransformer(nn.Module):
         # Classify
         logits = self.classifier(cls_representation)
         return logits
+
+class ContinuousValueTransformer(nn.Module):
+    """
+    Transformer model for regression prediction of continuous values between 0 and 1.
+    """
+    def __init__(self, embedding_dim=32, nhead=8, num_encoder_layers=6, dim_feedforward=2048, dropout=0.1):
+        super(ContinuousValueTransformer, self).__init__()
+        
+        self.embedding_dim = embedding_dim
+        
+        # Positional encoding
+        self.pos_encoder = PositionalEncoding(embedding_dim)
+        
+        # Transformer encoder
+        encoder_layers = TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = TransformerEncoder(encoder_layers, num_encoder_layers)
+        
+        # [CLS] token embedding - will be prepended to each sequence
+        # Borrows from BERT's approach of using a special classification token
+        # This token accumulates information from the entire sequence through self-attention
+        # By the final layer, the representation of this token serves as a summary of the entire input
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embedding_dim))
+        
+        # Final predictor for the [CLS] token representation
+        self.predictor = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embedding_dim, 1),
+            nn.Sigmoid()    # [0,1]
+        )
+        
+    def forward(self, x, src_mask=None):
+        """
+        Args:
+            x: Tensor of shape [batch_size, seq_len, embedding_dim]
+                Contains sequence to be processed
+            src_mask: Optional mask for the transformer
+        
+        Returns:
+            Regression output as a tensor of shape [batch_size, 1] with values in range [0,1]
+        """
+        batch_size = x.size(0)
+
+        # Add CLS token to the beginning of the sequence
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)
+
+        # Adds position information to each event embedding
+        x = self.pos_encoder.forward(x)
+
+        # Apply transformer encoder - self-attention mechanism processes the entire sequence, allowing events to contextualize each other
+        x = self.transformer_encoder(x, src_mask)
+
+        # Use the [CLS] token representation for regression
+        # Only the first position (CLS token) representation is used as it serves as a summary of the entire input
+        cls_representation = x[:, 0]
+
+        # Predict continuous value
+        logits = self.predictor(cls_representation)
+        return logits
